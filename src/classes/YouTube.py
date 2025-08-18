@@ -3,12 +3,14 @@ import g4f
 import json
 import time
 import requests
+import threading
 import assemblyai as aai
 
 from utils import *
 from cache import *
 from .Tts import TTS
 from config import *
+from config import get_image_generation_timeout, get_image_generation_max_retries
 from status import *
 from uuid import uuid4
 from constants import *
@@ -347,7 +349,7 @@ class YouTube:
                         error_occurred = e
                 
                 # Start the generation in a separate thread
-                thread = threading.Thread(target=generate_with_timeout)
+                thread = threading.Thread(target=generate_with_timeout, daemon=True)
                 thread.start()
                 thread.join(timeout=timeout_seconds)
                 
