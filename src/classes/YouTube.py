@@ -332,7 +332,6 @@ class YouTube:
                 client = Client()
                 
                 # Use threading timeout approach for G4F API call
-                import threading
                 response = None
                 error_occurred = None
                 
