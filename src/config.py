@@ -189,6 +189,28 @@ def get_outreach_message_body_file() -> str:
     with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
         return json.load(file)["outreach_message_body_file"]
 
+def get_image_generation_timeout() -> int:
+    """
+    Gets the timeout for image generation requests.
+
+    Returns:
+        timeout (int): The timeout in seconds
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        config = json.load(file)
+        return config.get("image_generation_timeout", 30)
+
+def get_image_generation_max_retries() -> int:
+    """
+    Gets the maximum number of retries for image generation.
+
+    Returns:
+        max_retries (int): The maximum retry attempts
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        config = json.load(file)
+        return config.get("image_generation_max_retries", 3)
+
 def get_assemblyai_api_key() -> str:
     """
     Gets the AssemblyAI API key.
