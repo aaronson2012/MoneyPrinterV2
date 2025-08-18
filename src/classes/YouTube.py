@@ -318,45 +318,102 @@ class YouTube:
         """
         print(f"Generating Image using G4F: {prompt}")
         
-        try:
-            from g4f.client import Client
-            
-            client = Client()
-            response = client.images.generate(
-                model="sdxl-turbo",
-                prompt=prompt,
-                response_format="url"
-            )
-            
-            if response and response.data and len(response.data) > 0:
-                # Download image from URL
-                image_url = response.data[0].url
-                image_response = requests.get(image_url)
-                
-                if image_response.status_code == 200:
-                    image_path = os.path.join(ROOT_DIR, ".mp", str(uuid4()) + ".png")
-                    
-                    with open(image_path, "wb") as image_file:
-                        image_file.write(image_response.content)
-                    
+        max_retries = get_image_generation_max_retries()
+        timeout_seconds = get_image_generation_timeout()
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
                     if get_verbose():
-                        info(f" => Downloaded Image from {image_url} to \"{image_path}\"\n")
+                        info(f" => Retry attempt {attempt + 1} of {max_retries} for prompt: {prompt}")
+                
+                # Create a fresh client instance for each attempt
+                from g4f.client import Client
+                client = Client()
+                
+                # Use threading timeout approach for G4F API call
+                import threading
+                response = None
+                error_occurred = None
+                
+                def generate_with_timeout():
+                    nonlocal response, error_occurred
+                    try:
+                        response = client.images.generate(
+                            model="sdxl-turbo",
+                            prompt=prompt,
+                            response_format="url"
+                        )
+                    except Exception as e:
+                        error_occurred = e
+                
+                # Start the generation in a separate thread
+                thread = threading.Thread(target=generate_with_timeout)
+                thread.start()
+                thread.join(timeout=timeout_seconds)
+                
+                if thread.is_alive():
+                    # Thread is still running, which means it timed out
+                    if get_verbose():
+                        warning(f"G4F image generation timed out after {timeout_seconds} seconds")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                        continue
+                    return None
+                
+                if error_occurred:
+                    raise error_occurred
+                
+                if response and response.data and len(response.data) > 0:
+                    # Download image from URL with timeout
+                    image_url = response.data[0].url
+                    image_response = requests.get(image_url, timeout=timeout_seconds)
                     
-                    self.images.append(image_path)
-                    return image_path
+                    if image_response.status_code == 200:
+                        image_path = os.path.join(ROOT_DIR, ".mp", str(uuid4()) + ".png")
+                        
+                        with open(image_path, "wb") as image_file:
+                            image_file.write(image_response.content)
+                        
+                        if get_verbose():
+                            info(f" => Downloaded Image from {image_url} to \"{image_path}\"\n")
+                        
+                        self.images.append(image_path)
+                        return image_path
+                    else:
+                        if get_verbose():
+                            warning(f"Failed to download image from URL: {image_url} (status: {image_response.status_code})")
+                        if attempt < max_retries - 1:
+                            time.sleep(1)
+                            continue  # Retry with a new request
+                        return None
                 else:
                     if get_verbose():
-                        warning(f"Failed to download image from URL: {image_url}")
+                        warning("Failed to generate image using G4F - no data in response")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                        continue  # Retry with a new request
                     return None
-            else:
+                    
+            except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
                 if get_verbose():
-                    warning("Failed to generate image using G4F - no data in response")
+                    warning(f"Request timed out or failed (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
                 return None
-                
-        except Exception as e:
-            if get_verbose():
-                warning(f"Failed to generate image using G4F: {str(e)}")
-            return None
+            except Exception as e:
+                if get_verbose():
+                    warning(f"Failed to generate image using G4F (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return None
+        
+        # All retries exhausted
+        if get_verbose():
+            warning(f"All {max_retries} attempts failed for image generation with prompt: {prompt}")
+        return None
 
     def generate_image_cloudflare(self, prompt: str, worker_url: str) -> str:
         """
@@ -371,26 +428,56 @@ class YouTube:
         """
         print(f"Generating Image using Cloudflare: {prompt}")
 
-        url = f"{worker_url}?prompt={prompt}&model=sdxl"
+        max_retries = get_image_generation_max_retries()
+        timeout_seconds = get_image_generation_timeout()
         
-        response = requests.get(url)
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    if get_verbose():
+                        info(f" => Retry attempt {attempt + 1} of {max_retries} for prompt: {prompt}")
+                
+                url = f"{worker_url}?prompt={prompt}&model=sdxl"
+                response = requests.get(url, timeout=timeout_seconds)
+                
+                if response.headers.get('content-type') == 'image/png':
+                    image_path = os.path.join(ROOT_DIR, ".mp", str(uuid4()) + ".png")
+                    
+                    with open(image_path, "wb") as image_file:
+                        image_file.write(response.content)
+                    
+                    if get_verbose():
+                        info(f" => Wrote Image to \"{image_path}\"\n")
+                    
+                    self.images.append(image_path)
+                    return image_path
+                else:
+                    if get_verbose():
+                        warning(f"Failed to generate image. The response was not a PNG image (content-type: {response.headers.get('content-type', 'unknown')})")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                        continue
+                    return None
+                    
+            except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
+                if get_verbose():
+                    warning(f"Request timed out or failed (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return None
+            except Exception as e:
+                if get_verbose():
+                    warning(f"Failed to generate image using Cloudflare (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return None
         
-        if response.headers.get('content-type') == 'image/png':
-            image_path = os.path.join(ROOT_DIR, ".mp", str(uuid4()) + ".png")
-            
-            with open(image_path, "wb") as image_file:
-                image_file.write(response.content)
-            
-            if get_verbose():
-                info(f" => Wrote Image to \"{image_path}\"\n")
-            
-            self.images.append(image_path)
-            
-            return image_path
-        else:
-            if get_verbose():
-                warning("Failed to generate image. The response was not a PNG image.")
-            return None
+        # All retries exhausted
+        if get_verbose():
+            warning(f"All {max_retries} attempts failed for Cloudflare image generation with prompt: {prompt}")
+        return None
 
     def generate_image(self, prompt: str) -> str:
         """
